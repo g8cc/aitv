@@ -1,0 +1,56 @@
+{
+  "provider": "mock",
+  "alibaba": {
+    "api_key": "",
+    "llm_base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "llm_model": "qwen-plus",
+    "asr_model": "paraformer-realtime-v2",
+    "asr_sample_rate": 16000,
+    "tts_model": "cosyvoice-v1",
+    "tts_voice": "longxiaochun",
+    "tts_sample_rate": 24000
+  },
+  "volc": {
+    "ark_api_key": "",
+    "llm_base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "llm_model": "doubao-seed-1-6-250615",
+    "tts_app_id": "",
+    "tts_access_token": "",
+    "tts_cluster": "volcano_tts",
+    "tts_voice_type": "S_Zh_MassqVlog",
+    "tts_sample_rate": 24000,
+    "asr_app_id": "",
+    "asr_access_token": "",
+    "asr_cluster": "streaming_asr"
+  },
+  "parent": {
+    "default_pin": "1234",
+    "daily_limit_minutes": 30
+  },
+  "songs": [
+    {
+      "id": "twinkle",
+      "title": "Twinkle Twinkle Little Star",
+      "title_cn": "小星星",
+      "asset": "assets/songs/twinkle.wav",
+      "lyric_lines": [
+        "Twinkle twinkle little star",
+        "How I wonder what you are",
+        "Up above the world so high",
+        "Like a diamond in the sky"
+      ]
+    },
+    {
+      "id": "bath",
+      "title": "Row Row Row Your Boat",
+      "title_cn": "划小船",
+      "asset": "assets/songs/bath.wav",
+      "lyric_lines": [
+        "Row row row your boat",
+        "Gently down the stream",
+        "Merrily merrily merrily merrily",
+        "Life is but a dream"
+      ]
+    }
+  ]
+}

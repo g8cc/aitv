@@ -1,0 +1,39 @@
+name: aitv
+description: "Tv English companion for preschoolers - voice-first animated character."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  webview_flutter: ^4.9.0
+  record: ^6.2.1
+  just_audio: ^0.9.40
+  flutter_tts: ^4.0.2
+  dio: ^5.7.0
+  web_socket_channel: ^3.0.1
+  shared_preferences: ^2.3.2
+  path_provider: ^2.1.4
+  permission_handler: ^11.3.1
+  crypto: ^3.0.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - config/app_config.json
+    - assets/live2d/
+    - assets/live2d/vendor/
+    - assets/live2d/hiyori/
+    - assets/live2d/hiyori/Hiyori.2048/
+    - assets/live2d/hiyori/motions/
+    - assets/songs/

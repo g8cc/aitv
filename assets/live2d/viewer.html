@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KidTV Character</title>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:transparent; }
+  canvas { display:block; width:100%; height:100%; }
+  #status { position:fixed; left:50%; bottom:8px; transform:translateX(-50%);
+            font:12px sans-serif; color:#8899aa; opacity:.6; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="status">loading…</div>
+<script src="vendor/live2dcubismcore.min.js"></script>
+<script src="vendor/pixi.min.js"></script>
+<script src="vendor/pixi-live2d-display-cubism4.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var MODEL_URL = 'hiyori/Hiyori.model3.json';
+  var statusEl = document.getElementById('status');
+
+  var app, model, ready = false;
+  var lip = { active:false, value:0, decay:0.82 };
+  var action = { name:'idle', t:0, seq:[] };
+  var gaze = { x:0, y:0, tx:0, ty:0 };
+
+  function postToFlutter(payload) {
+    try {
+      if (window.KtvBridge) window.KtvBridge.postMessage(JSON.stringify(payload));
+    } catch (e) { /* running outside webview */ }
+  }
+
+  app = new PIXI.Application({
+    backgroundAlpha: 0,
+    antialias: true,
+    autoDensity: true,
+    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    powerPreference: 'low-power'
+  });
+  document.body.appendChild(app.view);
+
+  function layout() {
+    app.renderer.resize(window.innerWidth, window.innerHeight);
+    if (!model) return;
+    var w = window.innerWidth, h = window.innerHeight;
+    var s = Math.min(h * 0.92 / model.height, w * 0.9 / model.width);
+    model.scale.set(s);
+    model.anchor.set(0.5, 0.5);
+    base.x = w / 2;
+    base.y = h / 2 - h * 0.02;
+    base.sx = s;
+    base.sy = s;
+    model.x = base.x;
+    model.y = base.y;
+  }
+  window.addEventListener('resize', layout);
+
+  // Cubism 4 core writes parameters by id; `weight` < 1 blends with the
+  // current value (the Cubism 2 style setParamFloat is not available).
+  function setParam(core, id, value, weight) {
+    try {
+      if (typeof core.setParameterValueById === 'function') {
+        var v = value;
+        if (weight != null && weight < 1 &&
+            typeof core.getParameterValueById === 'function') {
+          v = core.getParameterValueById(id) + (value - core.getParameterValueById(id)) * weight;
+        }
+        core.setParameterValueById(id, Math.max(-2, Math.min(2, v)));
+      } else if (typeof core.setParamFloat === 'function') {
+        core.setParamFloat(id, value, weight == null ? 1 : weight);
+      }
+    } catch (e) { /* parameter missing on this model */ }
+  }
+
+  function patchMouth(m) {
+    var core = m.internalModel.coreModel;
+    var origUpdate = core.update.bind(core);
+    core.update = function () {
+      var v = lip.active ? lip.value : 0;
+      setParam(core, 'ParamMouthOpenY', Math.max(0, Math.min(1, v)), 1);
+      origUpdate();
+    };
+  }
+
+  // Amplitude envelope smoothing, called by Dart at ~30Hz.
+  function setLip(value) {
+    lip.value = value;
+    lip.active = true;
+  }
+  function setSpeaking(on) {
+    lip.active = !!on;
+    if (!on) lip.value = 0;
+  }
+
+  // Container-level choreography so we are not limited to the model's own motion groups.
+  var base = { x:0, y:0, rot:0, sx:1, sy:1 };
+  function startAction(name) {
+    action.name = name || 'idle';
+    action.t = 0;
+  }
+  function applyAction(dt) {
+    if (!model) return;
+    action.t += dt;
+    var t = action.t;
+    var x = base.x, y = base.y, rot = 0, sy = 1;
+    switch (action.name) {
+      case 'dance':
+        rot = Math.sin(t * 6) * 0.09;
+        y = base.y - Math.abs(Math.sin(t * 6)) * 26;
+        sy = 1 + Math.sin(t * 12) * 0.02;
+        break;
+      case 'jump':
+        var ph = (t % 0.9) / 0.9;
+        y = base.y - Math.sin(ph * Math.PI) * 90;
+        sy = 1 + Math.sin(t * 20) * 0.01;
+        break;
+      case 'swing':
+        rot = Math.sin(t * 2.2) * 0.05;
+        break;
+      case 'tilt':
+        rot = Math.sin(t * 1.5) * 0.03;
+        break;
+      case 'sleep':
+        rot = Math.sin(t * 0.8) * 0.02;
+        sy = 1 + Math.sin(t * 1.6) * 0.01;
+        break;
+      case 'idle':
+      default:
+        rot = Math.sin(t * 1.2) * 0.008;
+    }
+    gaze.x += (gaze.tx - gaze.x) * 0.08;
+    gaze.y += (gaze.ty - gaze.y) * 0.08;
+    model.rotation = rot + gaze.x * 0.03;
+    model.x = x;
+    model.y = y;
+    model.scale.y = base.sy * sy;
+    // conserve area while the body squashes/stretches
+    model.scale.x = base.sx / sy;
+    try {
+      var core = model.internalModel.coreModel;
+      setParam(core, 'ParamAngleX', gaze.x * 30, 0.4);
+      setParam(core, 'ParamAngleY', gaze.y * 20, 0.4);
+      setParam(core, 'ParamEyeBallX', gaze.x, 0.5);
+      setParam(core, 'ParamEyeBallY', gaze.y, 0.5);
+    } catch (e) { /* model not ready */ }
+  }
+
+  function playMotion(group) {
+    if (!model) return;
+    model.motion(group, undefined, 2 /* FORCE */);
+  }
+
+  // Dart → JS command entry.
+  window.ktv = {
+    onMessage: function (msg) {
+      try {
+        var c = typeof msg === 'string' ? JSON.parse(msg) : msg;
+        switch (c.cmd) {
+          case 'lipsync': setLip(c.value || 0); break;
+          case 'speaking': setSpeaking(c.on); break;
+          case 'motion': playMotion(c.group || 'Idle'); break;
+          case 'action': startAction(c.name); break;
+          case 'gaze': gaze.tx = c.x || 0; gaze.ty = c.y || 0; break;
+          case 'hideMouthIdle': break; // reserved
+        }
+      } catch (e) {
+        postToFlutter({ event:'error', message: String(e) });
+      }
+    },
+    // Integration-time probe: lets the host verify a parameter really landed.
+    getParam: function (id) {
+      if (!model) return null;
+      try { return model.internalModel.coreModel.getParameterValueById(id); }
+      catch (e) { return null; }
+    }
+  };
+
+  var lastTick = performance.now();
+  app.ticker.add(function () {
+    var now = performance.now();
+    var dt = Math.min((now - lastTick) / 1000, 0.1);
+    lastTick = now;
+    if (lip.value > 0.001) {
+      // frame-rate independent envelope decay (0.82 per 1/60s)
+      lip.value *= Math.pow(lip.decay, dt * 60);
+    } else {
+      lip.value = 0;
+    }
+    applyAction(dt);
+  });
+
+  statusEl.textContent = '';
+  PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: false }).then(function (m) {
+    model = m;
+    app.stage.addChild(m);
+    patchMouth(m);
+    layout();
+    base.sy = m.scale.y; base.sx = m.scale.x;
+    ready = true;
+    statusEl.style.display = 'none';
+    postToFlutter({ event:'ready' });
+  }).catch(function (err) {
+    statusEl.textContent = 'model load failed: ' + err;
+    postToFlutter({ event:'error', message: String(err) });
+  });
+})();
+</script>
+</body>
+</html>
