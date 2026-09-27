@@ -43,10 +43,15 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
     private var appContext: Context? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var record: AudioRecord? = null
+    @Volatile private var record: AudioRecord? = null
     private var executor: ExecutorService? = null
     private var eventSink: EventChannel.EventSink? = null
-    @Volatile private var capturing = false
+    private val captureGeneration = java.util.concurrent.atomic.AtomicLong(0)
+
+    /** Stop flag owned by the running capture loop. A quick stop->start must
+     *  not revive the old loop: it checks this flag, not shared state, so two
+     *  AudioRecord pumps can never feed the sink at once. */
+    @Volatile private var loopStop: java.util.concurrent.atomic.AtomicBoolean? = null
 
     fun register(context: Context, messenger: BinaryMessenger) {
         appContext = context.applicationContext
@@ -55,6 +60,7 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
     }
 
     override fun onListen(arguments: Any?, sink: EventChannel.EventSink?) {
+        stopCapture()
         eventSink = sink
     }
 
@@ -102,7 +108,7 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
     }
 
     private fun startCapture(call: MethodCall, result: MethodChannel.Result) {
-        if (record != null) {
+        if (record != null || executor != null) {
             stopCapture()
         }
         val context = appContext
@@ -191,14 +197,16 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
         sampleRate: Int,
         sourceName: String,
     ) {
-        capturing = true
+        val generation = captureGeneration.get()
+        val stopFlag = java.util.concurrent.atomic.AtomicBoolean(true)
+        loopStop = stopFlag
         val pool = Executors.newSingleThreadExecutor()
         executor = pool
         val chunkBytes = sampleRate * 2 / 1000 * FRAME_MS
         val buffer = ByteArray(chunkBytes)
         pool.execute {
             try {
-                while (capturing) {
+                while (stopFlag.get()) {
                     val read = try {
                         rec.read(buffer, 0, buffer.size)
                     } catch (e: Exception) {
@@ -206,13 +214,17 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
                     }
                     if (read <= 0) break
                     val copy = buffer.copyOf(read)
-                    mainHandler.post { eventSink?.success(copy) }
+                    mainHandler.post {
+                        if (captureGeneration.get() == generation) {
+                            eventSink?.success(copy)
+                        }
+                    }
                 }
             } finally {
-                capturing = false
                 // Stopping from another thread while read() is in flight is not
                 // safe, so the recorder is closed here.
                 if (record === rec) record = null
+                if (loopStop === stopFlag) loopStop = null
                 release(rec)
             }
         }
@@ -226,10 +238,20 @@ class AudioInputPlugin : MethodChannel.MethodCallHandler, EventChannel.StreamHan
     }
 
     private fun stopCapture() {
-        capturing = false
+        captureGeneration.incrementAndGet()
+        loopStop?.set(false)
+        loopStop = null
+        val activeRecord = record
+        record = null
+        if (activeRecord != null) {
+            try {
+                activeRecord.stop()
+            } catch (_: IllegalStateException) {
+            }
+        }
         val pool = executor
         executor = null
-        pool?.shutdown()
+        pool?.shutdownNow()
     }
 
     private fun release(rec: AudioRecord) {

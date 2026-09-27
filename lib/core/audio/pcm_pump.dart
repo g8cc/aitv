@@ -20,7 +20,11 @@ class PcmPump {
 
   PcmPump({required this.sampleRate, EnergyVad? vad})
       : vad = vad ?? EnergyVad(frameMs: 30),
-        frameBytes = (sampleRate * 30 ~/ 1000) * 2;
+        frameBytes = (sampleRate * 30 ~/ 1000) * 2 {
+    if (sampleRate <= 0 || frameBytes <= 0) {
+      throw ArgumentError.value(sampleRate, 'sampleRate', 'must be positive');
+    }
+  }
 
   Stream<Uint8List> get frames => _frames.stream;
   Stream<VadEvent> get vadEvents => vad.events;

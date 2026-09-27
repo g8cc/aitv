@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/state/state_providers.dart';
 import 'log_page.dart';
@@ -16,15 +17,32 @@ class PinGate extends ConsumerStatefulWidget {
 class _PinGateState extends ConsumerState<PinGate> {
   String _entry = '';
   String? _error;
+  bool _verifying = false;
 
   Future<void> _press(String d) async {
+    if (_verifying) return;
     setState(() {
       _error = null;
       if (_entry.length < 4) _entry += d;
     });
     if (_entry.length == 4) {
-      final ok = await ref.read(pinStoreProvider).verify(_entry);
+      final pin = _entry;
+      _verifying = true;
+      bool ok;
+      try {
+        ok = await ref.read(pinStoreProvider).verify(pin);
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _verifying = false;
+            _error = '验证暂时不可用，请稍后再试';
+            _entry = '';
+          });
+        }
+        return;
+      }
       if (!mounted) return;
+      _verifying = false;
       if (ok) {
         Navigator.of(context)
             .push(MaterialPageRoute(builder: (_) => const ParentHome()));
@@ -85,13 +103,18 @@ class _PinGateState extends ConsumerState<PinGate> {
                   '0',
                   'back',
                 ],
-                onTap: (k) => k == 'clear'
-                    ? setState(() => _entry = '')
-                    : k == 'back'
-                        ? setState(() => _entry = _entry.isNotEmpty
-                            ? _entry.substring(0, _entry.length - 1)
-                            : _entry)
-                        : _press(k)),
+                onTap: (k) {
+                  if (_verifying) return;
+                  if (k == 'clear') {
+                    setState(() => _entry = '');
+                  } else if (k == 'back') {
+                    setState(() => _entry = _entry.isNotEmpty
+                        ? _entry.substring(0, _entry.length - 1)
+                        : _entry);
+                  } else {
+                    _press(k);
+                  }
+                }),
             const SizedBox(height: 8),
             TextButton(
               onPressed: () => Navigator.of(context).maybePop(),
@@ -175,7 +198,7 @@ class ParentHome extends ConsumerWidget {
             onPressed: () async {
               final v = await showDialog<int>(
                 context: context,
-                builder: (_) => const _LimitDialog(),
+                builder: (_) => _LimitDialog(initial: usage.limitMinutes),
               );
               if (v != null) {
                 usage.limitMinutes = v;
@@ -197,8 +220,8 @@ class ParentHome extends ConsumerWidget {
           OutlinedButton.icon(
             icon: const Icon(Icons.mic),
             label: const Text('麦克风自检 / 选择输入设备'),
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const MicTestPage())),
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const MicTestPage())),
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
@@ -214,14 +237,21 @@ class ParentHome extends ConsumerWidget {
 }
 
 class _LimitDialog extends StatefulWidget {
-  const _LimitDialog();
+  final int initial;
+  const _LimitDialog({required this.initial});
 
   @override
   State<_LimitDialog> createState() => _LimitDialogState();
 }
 
 class _LimitDialogState extends State<_LimitDialog> {
-  double _v = 30;
+  late double _v;
+
+  @override
+  void initState() {
+    super.initState();
+    _v = widget.initial.clamp(5, 240).toDouble();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -234,8 +264,8 @@ class _LimitDialogState extends State<_LimitDialog> {
             Text('${_v.round()} 分钟'),
             Slider(
               min: 5,
-              max: 120,
-              divisions: 23,
+              max: 240,
+              divisions: 47,
               value: _v,
               onChanged: (x) => setD(() => _v = x),
             ),
@@ -271,6 +301,7 @@ class _SetPinDialogState extends ConsumerState<_SetPinDialog> {
       content: TextField(
         controller: _ctl,
         keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
         maxLength: 4,
         autofocus: true,
       ),
@@ -289,5 +320,11 @@ class _SetPinDialogState extends ConsumerState<_SetPinDialog> {
         ),
       ],
     );
+  }
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
   }
 }

@@ -39,12 +39,13 @@ MicSource buildMicSource(MicSettings mic, {required bool preferred}) =>
         ? NativeMic(inputIndex: mic.inputIndex, inputName: mic.inputName)
         : MicService();
 
-final engineProvider = Provider<ConversationEngine>((ref) {
+final engineProvider = ChangeNotifierProvider<ConversationEngine>((ref) {
+  final tts = ref.watch(ttsProvider);
   final engine = ConversationEngine(
     config: ref.watch(appConfigProvider),
     llm: ref.watch(llmProvider),
     asr: ref.watch(asrProvider),
-    tts: ref.watch(ttsProvider),
+    tts: tts,
     character: ref.watch(characterControllerProvider),
     usage: ref.watch(usageTrackerProvider),
     log: ref.watch(conversationLogProvider),
@@ -52,7 +53,7 @@ final engineProvider = Provider<ConversationEngine>((ref) {
     micFactory: ({required bool preferred}) =>
         buildMicSource(ref.read(micSettingsProvider), preferred: preferred),
   );
+  ref.onDispose(() => unawaited(tts.dispose()));
   unawaited(engine.boot());
-  ref.onDispose(engine.dispose);
   return engine;
 });

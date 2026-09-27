@@ -18,6 +18,9 @@ class MockLlm implements LlmProvider {
   int _i = 0;
 
   @override
+  Future<void> cancel() async {}
+
+  @override
   Future<String> complete(List<ChatMessage> messages) async {
     final last = messages.isEmpty ? '' : messages.last.content;
     return replyFor(last);

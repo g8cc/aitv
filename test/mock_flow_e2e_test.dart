@@ -177,6 +177,7 @@ void main() {
 
       songs.finishCurrent();
       expect(character.actions.last, 'idle');
+      expect(engine.songNowPlaying, isNull);
 
       await engine.stopSong();
       expect(engine.songNowPlaying, isNull);

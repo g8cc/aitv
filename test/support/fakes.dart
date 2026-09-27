@@ -184,6 +184,17 @@ class FakeAsrSession implements AsrSession {
     _out.close();
   }
 
+  /// Server hung up without ever emitting a final result (silent utterance,
+  /// dropped WebSocket, task failure).
+  void closeWithoutResult() {
+    if (!_out.isClosed) _out.close();
+  }
+
+  /// Transport-level failure mid-utterance.
+  void failWith(Object error) {
+    if (!_out.isClosed) _out.addError(error);
+  }
+
   @override
   Future<void> finish() async {
     finishRequested = true;
@@ -201,6 +212,9 @@ class FakeAsrSession implements AsrSession {
 class SpyLlm implements LlmProvider {
   final prompts = <List<ChatMessage>>[];
   String answer = '[MOOD:cheer] Nice!';
+
+  @override
+  Future<void> cancel() async {}
 
   @override
   Future<String> complete(List<ChatMessage> messages) async {

@@ -36,11 +36,12 @@
 
   app = new PIXI.Application({
     backgroundAlpha: 0,
-    antialias: true,
+    antialias: false,
     autoDensity: true,
-    resolution: Math.min(window.devicePixelRatio || 1, 2),
+    resolution: Math.min(window.devicePixelRatio || 1, 1.5),
     powerPreference: 'low-power'
   });
+  app.ticker.maxFPS = 30;
   document.body.appendChild(app.view);
 
   function layout() {

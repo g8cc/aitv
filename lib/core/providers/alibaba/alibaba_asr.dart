@@ -31,6 +31,8 @@ class AlibabaAsrProvider implements AsrProvider {
         'Authorization': 'Bearer ${cfg.apiKey}',
         'User-Agent': 'aitv/0.1',
       },
+      connectTimeout: const Duration(seconds: 10),
+      pingInterval: const Duration(seconds: 20),
     );
     final session = AlibabaAsrSession(ch, cfg);
     session._startTask();
@@ -44,12 +46,18 @@ class AlibabaAsrSession implements AsrSession {
   final String taskId = newTaskId();
   final _out = StreamController<AsrResult>();
   bool _taskStarted = false;
+  bool _finishRequested = false;
+  bool _finishSent = false;
+  bool _taskCompleted = false;
+  bool _cancelled = false;
+  bool _socketClosed = false;
   final _pending = <Uint8List>[];
 
   AlibabaAsrSession(this._ch, this._cfg) {
     _ch.stream.listen(_onData, onError: (Object e) {
       if (!_out.isClosed) _out.addError(e);
     }, onDone: () {
+      _socketClosed = true;
       if (!_out.isClosed) _out.close();
     });
   }
@@ -72,6 +80,7 @@ class AlibabaAsrSession implements AsrSession {
         },
         'resources': [],
       },
+      'input': {},
     }));
   }
 
@@ -89,13 +98,18 @@ class AlibabaAsrSession implements AsrSession {
     final event = (j['header'] as Map?)?['event'] as String?;
     switch (event) {
       case 'task-started':
+        if (_cancelled) return;
         _taskStarted = true;
         for (final f in _pending) {
           _ch.sink.add(f);
         }
         _pending.clear();
+        if (_finishRequested) {
+          _sendFinish();
+        }
         break;
       case 'result-generated':
+        if (_cancelled || _taskCompleted) return;
         final output = ((j['payload'] as Map?)?['output'] as Map?) ?? const {};
         final sentence = output['sentence'] as Map?;
         final text = sentence?['text'] as String? ?? '';
@@ -106,6 +120,8 @@ class AlibabaAsrSession implements AsrSession {
         break;
       case 'task-finished':
       case 'task-failed':
+        _taskCompleted = true;
+        _pending.clear();
         if (!_out.isClosed) _out.close();
         break;
     }
@@ -113,6 +129,13 @@ class AlibabaAsrSession implements AsrSession {
 
   @override
   void addFrame(Uint8List pcm16) {
+    if (_finishRequested ||
+        _cancelled ||
+        _taskCompleted ||
+        _socketClosed ||
+        pcm16.isEmpty) {
+      return;
+    }
     if (_taskStarted) {
       _ch.sink.add(pcm16);
     } else {
@@ -122,24 +145,51 @@ class AlibabaAsrSession implements AsrSession {
 
   @override
   Future<void> finish() async {
-    if (_taskStarted) {
-      _ch.sink.add(json.encode({
-        'header': {
-          'action': 'finish-task',
-          'task_id': taskId,
-          'streaming': 'duplex',
-        },
-        'payload': {'input': {}},
-      }));
-    } else {
-      await _ch.sink.close();
+    if (_finishRequested || _cancelled || _taskCompleted) return;
+    _finishRequested = true;
+    if (_taskStarted && !_socketClosed) {
+      _sendFinish();
+    } else if (!_taskStarted && _socketClosed) {
+      await _closeSocket();
       if (!_out.isClosed) _out.close();
     }
   }
 
   @override
   Future<void> cancel() async {
-    await _ch.sink.close();
+    if (_cancelled && _socketClosed) return;
+    _cancelled = true;
+    _pending.clear();
+    await _closeSocket();
     if (!_out.isClosed) _out.close();
+  }
+
+  Future<void> _closeSocket() async {
+    if (_socketClosed) return;
+    _socketClosed = true;
+    try {
+      await _ch.sink.close();
+    } catch (_) {
+      // The peer may have closed the socket already.
+    }
+  }
+
+  void _sendFinish() {
+    if (_finishSent ||
+        _socketClosed ||
+        !_taskStarted ||
+        _cancelled ||
+        _taskCompleted) {
+      return;
+    }
+    _finishSent = true;
+    _ch.sink.add(json.encode({
+      'header': {
+        'action': 'finish-task',
+        'task_id': taskId,
+        'streaming': 'duplex',
+      },
+      'payload': {'input': {}},
+    }));
   }
 }

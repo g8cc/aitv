@@ -15,12 +15,33 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage> {
+class _HomePageState extends ConsumerState<HomePage>
+    with WidgetsBindingObserver {
   bool _consentAnswered = false;
   final _textCtl = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+    final engine = ref.read(engineProvider);
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(engine.suspend());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(engine.resume());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _textCtl.dispose();
     super.dispose();
   }
@@ -29,7 +50,6 @@ class _HomePageState extends ConsumerState<HomePage> {
   Widget build(BuildContext context) {
     final engine = ref.watch(engineProvider);
     final character = ref.watch(characterControllerProvider);
-    ref.listen<ConversationEngine>(engineProvider, (_, __) => setState(() {}));
 
     return Scaffold(
       body: Stack(
@@ -117,15 +137,13 @@ class _TopBar extends ConsumerWidget {
             style: const TextStyle(color: Color(0xFF8A97A5), fontSize: 13),
           ),
           const SizedBox(width: 10),
-          InkWell(
-            onTap: () {
+          IconButton(
+            tooltip: '家长设置',
+            onPressed: () {
               Navigator.of(context)
                   .push(MaterialPageRoute(builder: (_) => const PinGate()));
             },
-            child: const Padding(
-              padding: EdgeInsets.all(4),
-              child: Icon(Icons.settings, color: Color(0xFF8A97A5)),
-            ),
+            icon: const Icon(Icons.settings, color: Color(0xFF8A97A5)),
           ),
         ],
       ),
@@ -154,6 +172,8 @@ class _SubtitleBar extends StatelessWidget {
               : text,
           key: ValueKey(text),
           textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
           style: const TextStyle(
             color: Color(0xFF35485C),
             fontSize: 30,

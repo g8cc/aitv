@@ -216,8 +216,10 @@ void main() {
       for (var i = 0; i < 61; i++) {
         usage.tickSecond();
       }
-      await until(() => engine.phase == EnginePhase.speaking);
-      expect(tts.spoken.last, contains('晚安'));
+      // The lock's own narration runs over a locked phase, so the mic cannot
+      // be talked into listening before the line finishes.
+      await until(() => tts.spoken.last.contains('晚安'));
+      expect(engine.phase, EnginePhase.locked);
 
       usage.limitMinutes = 60;
       await engine.unlock();
@@ -227,6 +229,35 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 60));
       expect(engine.phase, EnginePhase.listening,
           reason: 'the finished good-night turn must not reset the mic');
+    });
+
+    test('input and mode changes are refused while the lock line plays',
+        () async {
+      await openMic();
+      tts.hold = Completer<void>();
+      usage.limitMinutes = 1;
+      for (var i = 0; i < 61; i++) {
+        usage.tickSecond();
+      }
+      await until(() => tts.spoken.last.contains('晚安'));
+
+      await engine.submitTypedText('hello');
+      await engine.switchMode(AppMode.story);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(engine.mode, AppMode.chat,
+          reason: 'a locked engine must not switch modes');
+      expect(tts.spoken.last, contains('晚安'),
+          reason: 'no reply may be spoken over the good-night line');
+
+      usage.limitMinutes = 60;
+      await engine.unlock();
+      tts.hold!.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      // The abandoned good-night turn must not park the character asleep
+      // after the parent has already reopened the session.
+      expect(engine.phase, EnginePhase.listening);
+      expect(character.actions.last, isNot('sleep'));
     });
   });
 
@@ -286,6 +317,7 @@ void main() {
 
       await e.pauseMic();
       expect(first.stopCount, 1);
+      expect(asr.latest.cancelled, isTrue);
 
       await e.restartMic();
       expect(first.disposed, isTrue);

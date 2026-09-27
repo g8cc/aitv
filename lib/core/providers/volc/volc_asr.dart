@@ -27,6 +27,8 @@ class VolcAsrProvider implements AsrProvider {
         'X-Api-Resource-Id': 'volc.bigasr.sauc.duration',
         'X-Api-Connect-Id': DateTime.now().microsecondsSinceEpoch.toString(),
       },
+      connectTimeout: const Duration(seconds: 10),
+      pingInterval: const Duration(seconds: 20),
     );
     final session = VolcAsrSession(ch);
     session._sendConfig();
@@ -39,16 +41,21 @@ class VolcAsrSession implements AsrSession {
   final _out = StreamController<AsrResult>();
   int _seq = 1;
   bool _configSent = false;
+  bool _finishRequested = false;
+  bool _cancelled = false;
+  bool _socketClosed = false;
 
   VolcAsrSession(this._ch) {
     _ch.stream.listen(_onData, onError: (Object e) {
       if (!_out.isClosed) _out.addError(e);
     }, onDone: () {
+      _socketClosed = true;
       if (!_out.isClosed) _out.close();
     });
   }
 
   void _sendConfig() {
+    if (_cancelled || _socketClosed) return;
     final frame = encodeFullClientRequest({
       'user': {'uid': 'aitv'},
       'audio': {
@@ -69,6 +76,7 @@ class VolcAsrSession implements AsrSession {
   }
 
   void _onData(dynamic data) {
+    if (_cancelled) return;
     if (data is! List<int>) return;
     final f = decodeFrame(Uint8List.fromList(data));
     if (f == null) return;
@@ -99,19 +107,39 @@ class VolcAsrSession implements AsrSession {
 
   @override
   void addFrame(Uint8List pcm16) {
-    if (!_configSent) return;
+    if (!_configSent ||
+        _finishRequested ||
+        _cancelled ||
+        _socketClosed ||
+        pcm16.isEmpty) {
+      return;
+    }
     _ch.sink.add(encodeAudioFrame(pcm16, sequence: _seq, last: false));
     _seq++;
   }
 
   @override
   Future<void> finish() async {
-    _ch.sink.add(encodeAudioFrame(Uint8List(0), sequence: _seq, last: true));
+    if (_finishRequested || _cancelled || _socketClosed || !_configSent) return;
+    _finishRequested = true;
+    _ch.sink.add(encodeFinishRequest());
   }
 
   @override
   Future<void> cancel() async {
-    await _ch.sink.close();
+    if (_cancelled && _socketClosed) return;
+    _cancelled = true;
+    await _closeSocket();
     if (!_out.isClosed) _out.close();
+  }
+
+  Future<void> _closeSocket() async {
+    if (_socketClosed) return;
+    _socketClosed = true;
+    try {
+      await _ch.sink.close();
+    } catch (_) {
+      // The peer may have closed the socket already.
+    }
   }
 }

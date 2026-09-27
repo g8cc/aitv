@@ -108,6 +108,7 @@ class _MicTestPageState extends ConsumerState<MicTestPage> {
       _verdict = null;
       _detail = null;
       _recorded = null;
+      _playbackPath = null;
     });
 
     final engine = ref.read(engineProvider);

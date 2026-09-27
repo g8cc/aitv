@@ -39,6 +39,14 @@ void main() {
       }
     });
 
+    test('raw PCM bytes stay byte-for-byte inside the WAV payload', () {
+      final pcmBytes = Uint8List.fromList([0, 1, 0xff, 0x7f, 0x00, 0x80]);
+      final wav = WavUtil.wrapPcm16Bytes(pcmBytes, 24000);
+
+      expect(wav.length, 44 + pcmBytes.length);
+      expect(wav.sublist(44), pcmBytes);
+    });
+
     test('non-wav bytes return null', () {
       expect(WavUtil.extractPcm16(List<int>.filled(64, 0)), isNull);
     });

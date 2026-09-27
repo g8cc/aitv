@@ -17,19 +17,34 @@ abstract class SongPlayer {
 class JustAudioSongPlayer implements SongPlayer {
   final AudioPlayer _player = AudioPlayer();
   StreamSubscription<ProcessingState>? _doneSub;
+  int _generation = 0;
 
   @override
   Future<void> play(String asset, {required void Function() onFinished}) async {
+    final generation = ++_generation;
     await _doneSub?.cancel();
     await _player.setAsset(asset);
+    if (generation != _generation) return;
+    var finished = false;
     _doneSub = _player.processingStateStream.listen((s) {
-      if (s == ProcessingState.completed) onFinished();
+      if (s == ProcessingState.completed && !finished) {
+        finished = true;
+        onFinished();
+      }
     });
-    unawaited(_player.play());
+    try {
+      await _player.play();
+    } finally {
+      if (generation == _generation) {
+        await _doneSub?.cancel();
+        _doneSub = null;
+      }
+    }
   }
 
   @override
   Future<void> stop() async {
+    _generation++;
     await _doneSub?.cancel();
     _doneSub = null;
     try {

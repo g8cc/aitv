@@ -21,6 +21,10 @@ abstract class TtsProvider {
 /// Produces RIFF wav bytes for a text (cloud providers implement this).
 abstract class TtsFetcher {
   Future<Uint8List> fetchWav(String text);
+
+  /// Cancels the current network synthesis, if the implementation supports it.
+  Future<void> cancel() async {}
+
   Future<void> dispose() async {}
 }
 
@@ -34,6 +38,8 @@ class CloudTtsProvider implements TtsProvider {
   List<double> _envelope = const [];
   Completer<void>? _done;
   StreamSubscription<ProcessingState>? _completeSub;
+  Future<void> _playbackQueue = Future<void>.value();
+  int _generation = 0;
 
   CloudTtsProvider(this.fetcher);
 
@@ -41,10 +47,24 @@ class CloudTtsProvider implements TtsProvider {
   Stream<double> get amplitudes => _amplitudes.stream;
 
   @override
-  Future<void> speak(String text) async {
+  Future<void> speak(String text) {
+    final generation = ++_generation;
+    _interruptCurrentPlayback();
+
+    final operation = _playbackQueue.then((_) {
+      return _speakLatest(text, generation);
+    });
+    _playbackQueue = operation.catchError((_) {});
+    return operation;
+  }
+
+  Future<void> _speakLatest(String text, int generation) async {
+    if (generation != _generation) return;
     final wav = await fetcher.fetchWav(text);
+    if (generation != _generation) return;
+
     final pcm = WavUtil.extractPcm16(wav);
-    if (pcm != null) {
+    if (pcm != null && wav.length >= 28) {
       final rate = ByteData.sublistView(wav).getUint32(24, Endian.little);
       _envelope = WavUtil.envelope(pcm, rate, windowMs: 33);
     } else {
@@ -54,21 +74,39 @@ class CloudTtsProvider implements TtsProvider {
     final file =
         File('${dir.path}/tts_${DateTime.now().microsecondsSinceEpoch}.wav');
     await file.writeAsBytes(wav);
-    _done = Completer<void>();
-    await _player.setFilePath(file.path);
-    _completeSub = _player.processingStateStream.listen((s) {
-      if (s == ProcessingState.completed &&
-          _done != null &&
-          !_done!.isCompleted) {
-        _done!.complete();
-      }
-    });
-    _startEnvelope();
-    await _player.play();
-    await _done!.future;
+    final done = Completer<void>();
+    StreamSubscription<ProcessingState>? completeSub;
+    try {
+      await _player.setFilePath(file.path);
+      if (generation != _generation) return;
+
+      _done = done;
+      completeSub = _player.processingStateStream.listen((s) {
+        if (s == ProcessingState.completed && !done.isCompleted) {
+          done.complete();
+        }
+      });
+      _completeSub = completeSub;
+      _startEnvelope();
+      await _player.play();
+      await done.future;
+    } finally {
+      // Every exit path (stop(), play error, timeout) must silence the
+      // envelope, release the listener and remove the temp file.
+      _stopEnvelope();
+      await completeSub?.cancel();
+      if (identical(_completeSub, completeSub)) _completeSub = null;
+      if (identical(_done, done)) _done = null;
+      unawaited(file.delete().catchError((e) => file));
+    }
+  }
+
+  void _interruptCurrentPlayback() {
+    unawaited(fetcher.cancel().catchError((_) {}));
     _stopEnvelope();
-    await _completeSub?.cancel();
-    unawaited(file.delete().catchError((e) => file));
+    final done = _done;
+    if (done != null && !done.isCompleted) done.complete();
+    unawaited(_player.stop());
   }
 
   void _startEnvelope() {
@@ -91,15 +129,19 @@ class CloudTtsProvider implements TtsProvider {
 
   @override
   Future<void> stop() async {
-    _stopEnvelope();
-    if (_done != null && !_done!.isCompleted) _done!.complete();
+    _generation++;
+    _interruptCurrentPlayback();
+    await _completeSub?.cancel();
+    _completeSub = null;
     await _player.stop();
   }
 
   @override
   Future<void> dispose() async {
-    _stopEnvelope();
+    _generation++;
+    _interruptCurrentPlayback();
     await _completeSub?.cancel();
+    _completeSub = null;
     await _player.dispose();
     await _amplitudes.close();
     await fetcher.dispose();
@@ -113,6 +155,7 @@ class MockTtsProvider implements TtsProvider {
   final _amplitudes = StreamController<double>.broadcast();
   final math.Random _rnd = math.Random();
   Timer? _fakeTimer;
+  Completer<void>? _active;
 
   MockTtsProvider() {
     tts.setLanguage('en-US');
@@ -126,6 +169,7 @@ class MockTtsProvider implements TtsProvider {
   @override
   Future<void> speak(String text) async {
     final done = Completer<void>();
+    _active = done;
     tts.setCompletionHandler(() {
       if (!done.isCompleted) done.complete();
     });
@@ -133,9 +177,13 @@ class MockTtsProvider implements TtsProvider {
       if (!done.isCompleted) done.completeError(e);
     });
     _startFakeEnvelope(text);
-    await tts.speak(text);
-    await done.future.timeout(const Duration(minutes: 3), onTimeout: () {});
-    _stopFakeEnvelope();
+    try {
+      await tts.speak(text);
+      await done.future.timeout(const Duration(minutes: 3), onTimeout: () {});
+    } finally {
+      if (identical(_active, done)) _active = null;
+      _stopFakeEnvelope();
+    }
   }
 
   void _startFakeEnvelope(String text) {
@@ -161,12 +209,20 @@ class MockTtsProvider implements TtsProvider {
   @override
   Future<void> stop() async {
     _stopFakeEnvelope();
+    // Release a speak() that is waiting on the platform: flutter_tts does not
+    // reliably fire its completion handler on stop().
+    final active = _active;
+    if (active != null && !active.isCompleted) active.complete();
+    _active = null;
     await tts.stop();
   }
 
   @override
   Future<void> dispose() async {
     _fakeTimer?.cancel();
+    final active = _active;
+    if (active != null && !active.isCompleted) active.complete();
+    _active = null;
     await tts.stop();
     await _amplitudes.close();
   }

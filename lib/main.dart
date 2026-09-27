@@ -25,7 +25,8 @@ Future<void> main() async {
 
   final config = await AppConfig.load();
   final prefs = await SharedPreferences.getInstance();
-  final usage = UsageTracker(prefs);
+  final usage = UsageTracker(prefs,
+      defaultLimitMinutes: config.dailyLimitMinutes);
   final character = CharacterController();
 
   runApp(ProviderScope(
